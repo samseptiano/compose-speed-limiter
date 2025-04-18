@@ -7,13 +7,10 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
 import android.os.Build
-import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.util.Log
 import androidx.annotation.RequiresApi
-import androidx.compose.runtime.FloatState
-import androidx.compose.runtime.remember
 import androidx.core.app.NotificationCompat
 import com.google.android.gms.location.FusedLocationProviderClient
 import com.google.android.gms.location.LocationCallback
@@ -22,13 +19,15 @@ import com.google.android.gms.location.LocationResult
 import com.google.android.gms.location.LocationServices
 import com.samuelseptiano.speedreminder.MainActivity
 import com.samuelseptiano.speedreminder.R
+import com.samuelseptiano.speedreminder.util.Constant.INTENT_KEY_IS_FAKE_GPS
+import com.samuelseptiano.speedreminder.util.Constant.INTENT_KEY_LAT
+import com.samuelseptiano.speedreminder.util.Constant.INTENT_KEY_LON
+import com.samuelseptiano.speedreminder.util.Constant.INTENT_KEY_SPEED
 import com.samuelseptiano.speedreminder.util.LocationUtil.MIN_INTERVAL
 import com.samuelseptiano.speedreminder.util.LocationUtil.calculateSpeed
-import com.samuelseptiano.speedreminder.util.LocationUtil.isMockLocation
 import com.samuelseptiano.speedreminder.util.checkMultiplePermission
 import com.samuelseptiano.speedreminder.util.convertTo2PlacesDecimal
-import com.samuelseptiano.speedreminder.util.requestMultiplePermissions
-import com.samuelseptiano.speedreminder.util.savePrefsData
+import com.samuelseptiano.speedreminder.util.setAlertSound
 
 /**
  * Created by samuel.septiano on 08/04/2025.
@@ -54,13 +53,16 @@ class LocationForegroundService : Service() {
                     val speedInMetersPerSecond = location.speed
                     val speedInKmPerHour = calculateSpeed(speedInMetersPerSecond)
                     speedState = convertTo2PlacesDecimal(speedInKmPerHour).toFloat()
+                    Log.d("speedState service", speedState.toString())
+                    setAlertSound(speedState)
 
+                    val intent = Intent("com.example.ACTION_SEND_DATA")
+                    intent.putExtra(INTENT_KEY_SPEED, speedState)
+                    intent.putExtra(INTENT_KEY_LON, lonState)
+                    intent.putExtra(INTENT_KEY_LAT, latState)
+                    intent.putExtra(INTENT_KEY_IS_FAKE_GPS, location.isMock)
 
-                    this@LocationForegroundService.savePrefsData(
-                        speedState,
-                        latState,
-                        lonState
-                    )
+                    sendBroadcast(intent)
 
                     updateNotification(speedState, latState, lonState)
 
@@ -72,7 +74,8 @@ class LocationForegroundService : Service() {
     override fun onCreate() {
         super.onCreate()
         Log.d("ForegroundService", "Service Created")
-        fusedLocationClient = LocationServices.getFusedLocationProviderClient(this@LocationForegroundService)
+        fusedLocationClient =
+            LocationServices.getFusedLocationProviderClient(this@LocationForegroundService)
         createNotificationChannel() // Ensure it's created before startForeground
 
         if (this@LocationForegroundService.checkMultiplePermission()) {
@@ -113,6 +116,8 @@ class LocationForegroundService : Service() {
             .setOngoing(true) // prevent swipe-dismiss
             .build()
     }
+
+
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {

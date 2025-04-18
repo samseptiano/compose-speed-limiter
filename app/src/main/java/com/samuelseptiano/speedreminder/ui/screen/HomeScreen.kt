@@ -1,22 +1,34 @@
 package com.samuelseptiano.speedreminder.ui.screen
 
 import android.app.Activity
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.os.Build
-import android.os.Looper
+import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.RequiresApi
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.MaterialTheme
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentSize
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableDoubleStateOf
@@ -27,69 +39,46 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.app.ActivityCompat
-import androidx.core.content.ContextCompat.startForegroundService
-import com.google.android.gms.location.FusedLocationProviderClient
-import com.google.android.gms.location.LocationCallback
-import com.google.android.gms.location.LocationRequest
-import com.google.android.gms.location.LocationResult
-import com.google.android.gms.location.LocationServices
+import com.samuelseptiano.speedreminder.R
 import com.samuelseptiano.speedreminder.service.LocationForegroundService
+import com.samuelseptiano.speedreminder.util.Constant.INTENT_KEY_IS_FAKE_GPS
+import com.samuelseptiano.speedreminder.util.Constant.INTENT_KEY_LAT
+import com.samuelseptiano.speedreminder.util.Constant.INTENT_KEY_LON
+import com.samuelseptiano.speedreminder.util.Constant.INTENT_KEY_SPEED
 import com.samuelseptiano.speedreminder.util.DateUtil.getCurrentTimeStamp
-import com.samuelseptiano.speedreminder.util.LocationUtil.MIN_INTERVAL
-import com.samuelseptiano.speedreminder.util.LocationUtil.calculateSpeed
 import com.samuelseptiano.speedreminder.util.LocationUtil.getAddressFromLatLng
-import com.samuelseptiano.speedreminder.util.LocationUtil.isMockLocation
 import com.samuelseptiano.speedreminder.util.LocationUtil.showPermissionSettingsDialog
-import com.samuelseptiano.speedreminder.util.PREFS_LAT
-import com.samuelseptiano.speedreminder.util.PREFS_LON
-import com.samuelseptiano.speedreminder.util.PREFS_NAME
-import com.samuelseptiano.speedreminder.util.PREFS_SPEED
 import com.samuelseptiano.speedreminder.util.checkMultiplePermission
 import com.samuelseptiano.speedreminder.util.convertTo2PlacesDecimal
 import com.samuelseptiano.speedreminder.util.getListPermission
 import com.samuelseptiano.speedreminder.util.requestMultiplePermissions
-import com.samuelseptiano.speedreminder.util.savePrefsData
 import kotlinx.coroutines.delay
+import org.osmdroid.config.Configuration
+import org.osmdroid.tileprovider.tilesource.TileSourceFactory
+import org.osmdroid.util.GeoPoint
+import org.osmdroid.views.MapView
+import org.osmdroid.views.overlay.Marker
 
 /**
  * Created by samuel.septiano on 08/04/2025.
  */
+@RequiresApi(Build.VERSION_CODES.TIRAMISU)
 @Composable
 fun HomeScreen(activity: Activity) {
     val context = LocalContext.current
+    val appContext = context.applicationContext
+    val receiverRef = remember { mutableStateOf<BroadcastReceiver?>(null) }
 
     var isFakeGPS by remember { mutableStateOf(false) }
 
     var speedState by remember { mutableDoubleStateOf(0.0) }
     var latState by remember { mutableDoubleStateOf(0.0) }
     var lonState by remember { mutableDoubleStateOf(0.0) }
+    var isPermissionGrantedState by remember { mutableStateOf(false) }
 
-    val fusedLocationClient: FusedLocationProviderClient =
-        LocationServices.getFusedLocationProviderClient(context)
-    val locationCallback: LocationCallback = remember {
-        object : LocationCallback() {
-            @RequiresApi(Build.VERSION_CODES.S)
-            override fun onLocationResult(locationResult: LocationResult) {
-                super.onLocationResult(locationResult)
-                for (location in locationResult.locations) {
-                    latState = location.latitude
-                    lonState = location.longitude
-                    isFakeGPS = isMockLocation(location)
-
-                    val speedInMetersPerSecond = location.speed
-                    val speedInKmPerHour = calculateSpeed(speedInMetersPerSecond)
-                    speedState = convertTo2PlacesDecimal(speedInKmPerHour)
-
-                    context.savePrefsData(
-                        speedState.toFloat(),
-                        latState.toFloat(),
-                        lonState.toFloat()
-                    )
-                }
-            }
-        }
-    }
 
     val launcher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
@@ -116,21 +105,7 @@ fun HomeScreen(activity: Activity) {
 
         } else {
             // All permissions granted, proceed
-            locationCallback.let {
-
-
-                // Create and configure the LocationRequest
-                val locationRequest = LocationRequest.create()
-                locationRequest.setInterval(MIN_INTERVAL) // Update every 10 seconds
-                locationRequest.setFastestInterval(MIN_INTERVAL) // Fastest update every 5 seconds
-                locationRequest.setPriority(LocationRequest.PRIORITY_HIGH_ACCURACY)
-
-                fusedLocationClient.requestLocationUpdates(
-                    locationRequest,
-                    it,
-                    Looper.getMainLooper()
-                )
-            }
+            isPermissionGrantedState = true
         }
     }
 
@@ -154,38 +129,49 @@ fun HomeScreen(activity: Activity) {
             launcher.launch(permissionsToRequest.toTypedArray())
         }
         if (context.checkMultiplePermission()) {
-            locationCallback.let {
+            isPermissionGrantedState = true
+        }
+    }
 
-                // Create and configure the LocationRequest
-                val locationRequest = com.google.android.gms.location.LocationRequest.create()
-                locationRequest.setInterval(MIN_INTERVAL) // Update every 10 seconds
-                locationRequest.setFastestInterval(MIN_INTERVAL) // Fastest update every 5 seconds
-                locationRequest.setPriority(com.google.android.gms.location.LocationRequest.PRIORITY_HIGH_ACCURACY)
+    // Receiver setup
+    DisposableEffect(Unit) {
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
 
-                fusedLocationClient.requestLocationUpdates(
-                    locationRequest,
-                    it,
-                    Looper.getMainLooper()
-                )
+                speedState = convertTo2PlacesDecimal(intent?.getFloatExtra(INTENT_KEY_SPEED, 0f)?.toDouble() ?: 0.0)
+                latState = intent?.getFloatExtra(INTENT_KEY_LAT, 0f)?.toDouble() ?: 0.0
+                lonState = intent?.getFloatExtra(INTENT_KEY_LON, 0f)?.toDouble() ?: 0.0
+                isFakeGPS = intent?.getBooleanExtra(INTENT_KEY_IS_FAKE_GPS, false)?:false
+
+                Log.d("speedState", speedState.toString())
+            }
+        }
+
+        val filter = IntentFilter("com.example.ACTION_SEND_DATA")
+        appContext.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        receiverRef.value = receiver
+
+
+        onDispose {
+            receiverRef.value?.let {
+                try {
+                    appContext.unregisterReceiver(it)
+                } catch (e: Exception) {
+                    Log.w("BroadcastReceiver", "Unregister failed: ${e.message}")
+                }
+                receiverRef.value = null
             }
         }
     }
 
 
-    LaunchedEffect(Unit) {
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val speed = prefs.getFloat(PREFS_SPEED, 0f)
-        val lat = prefs.getFloat(PREFS_LAT, 0f)
-        val lon = prefs.getFloat(PREFS_LON, 0f)
-
-        if (lat != 0f && lon != 0f) {
-            speedState = speed.toDouble()
-            latState = lat.toDouble()
-            lonState = lon.toDouble()
-        }
+    LaunchedEffect(isPermissionGrantedState) {
 
         registerLocationUpdate()
-        startLocationForegroundService(context)
+
+        if (isPermissionGrantedState) {
+            startLocationForegroundService(context)
+        }
 
     }
 
@@ -193,80 +179,79 @@ fun HomeScreen(activity: Activity) {
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(innerPadding),
-            contentAlignment = Alignment.Center
+                .padding(innerPadding)
         ) {
+            // Map takes the full screen
+            MapScreen(
+                latState = latState,
+                lonState = lonState,
+                modifier = Modifier.fillMaxSize()
+            )
+
+            // Overlay UI
             Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(0.dp)
+                    .background(Color.White.copy(alpha = 1f), shape = RoundedCornerShape(0.dp))
+                    .padding(top = 4.dp, bottom = 4.dp, start = 8.dp, end = 8.dp)
+                    .verticalScroll(rememberScrollState()),
+                horizontalAlignment = Alignment.Start
             ) {
-                Greeting(name = "Android")
-                ShowCoordinate(lat = latState, lon = lonState)
-                ShowAddress(ctx = context, lat = latState, lon = lonState)
-                ShowSpeed(speed = speedState)
                 ShowTimeStamp()
-                if (isFakeGPS) {
-                    Text(
-                        text = "Fake GPS",
-                        color = Color.Red
-                    )
+            }
+
+            Column(
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(16.dp)
+            ) {
+                // Speed Box
+                Column(
+                    modifier = Modifier
+                        .wrapContentSize()
+                        .background(Color.Black.copy(alpha = 0.6f), shape = RoundedCornerShape(8.dp))
+                        .padding(8.dp)
+                ) {
+                    Row {
+                        ShowSpeed(speed = speedState)
+                        Spacer(modifier = Modifier.width(8.dp)) // Gap between sections
+                        if (isFakeGPS) {
+                            Text(
+                                text = "Fake GPS",
+                                color = Color.Red
+                            )
+                        }
+                    }
+
+                }
+
+                Spacer(modifier = Modifier.height(8.dp)) // Gap between sections
+
+                // Coordinate + Address Box
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(Color.Black.copy(alpha = 0.6f), shape = RoundedCornerShape(8.dp))
+                        .padding(8.dp)
+                        .verticalScroll(rememberScrollState()),
+                    horizontalAlignment = Alignment.Start
+                ) {
+                    ShowCoordinate(lat = latState, lon = lonState)
+                    ShowAddress(ctx = context, lat = latState, lon = lonState)
                 }
             }
+
         }
     }
 
 
 }
 
-@Composable
-fun ShowCoordinate(lat: Double, lon: Double, modifier: Modifier = Modifier) {
-
-    Text(
-        text = "Coordinate: $lat, $lon",
-        modifier = modifier
-    )
-}
-
-@Composable
-fun ShowSpeed(speed: Double, modifier: Modifier = Modifier) {
-    Text(
-        text = "Speed: ${speed} km/h",
-        modifier = modifier
-    )
-}
-
-@Composable
-fun ShowAddress(ctx: Context, lat: Double, lon: Double, modifier: Modifier = Modifier) {
-    Text(
-        text = "Address: ${getAddressFromLatLng(ctx, lat, lon)}",
-        modifier = modifier
-    )
-}
 
 
-@Composable
-fun ShowTimeStamp(modifier: Modifier = Modifier) {
-    var time by remember { mutableStateOf(getCurrentTimeStamp()) }
-
-    LaunchedEffect(Unit) {
-        while (true) {
-            time = getCurrentTimeStamp()
-            delay(1000) // update every second
-        }
-    }
-
-    Text(
-        text = time,
-        modifier = modifier
-    )
-}
 
 
-@Composable
-fun Greeting(name: String, modifier: Modifier = Modifier) {
-    Text(
-        text = "Hello $name!",
-        modifier = modifier
-    )
-}
+
+
 
